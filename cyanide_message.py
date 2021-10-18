@@ -1,0 +1,123 @@
+
+""" Different types of messages
+
+[
+    {
+        "poisoner": "ntlmrelayx",
+        "target": "10.0.220.52",
+        "user": "SMOKE\\jsmith",
+        "timestamp": 1628686070.145719,
+        "action_state": "captured_hash",
+        "data": {
+            "module": "SMB",
+            "hash": "jsmith::SMOKE:41414141414141414141414141414141:b96c85673739f39f3d64d7893b53ce6d:0101000000000000001fc617af8ed7014083e8240840700d00000000010016007300650072007600650072005f006e0061006d006500030016007300650072007600650072005f006e0061006d0065000200120057004f0052004b00470052004f00550050000400120057004f0052004b00470052004f005500500007000800001fc617af8ed701060004000200000008003000300000000000000000000000002000000fb641a5f1ca4019a7e8bc5b87f722f954af12743ff1f5c8b322fc94dcfdfb340a001000000000000000000000000000000000000900120063006900660073002f007400650073007400000000000000000000000000",
+            "type": "ntlmv2",
+            "source_host": "10.0.220.52",
+            "fullhash": "jsmith::SMOKE:41414141414141414141414141414141:b96c85673739f39f3d64d7893b53ce6d:0101000000000000001fc617af8ed7014083e8240840700d00000000010016007300650072007600650072005f006e0061006d006500030016007300650072007600650072005f006e0061006d0065000200120057004f0052004b00470052004f00550050000400120057004f0052004b00470052004f005500500007000800001fc617af8ed701060004000200000008003000300000000000000000000000002000000fb641a5f1ca4019a7e8bc5b87f722f954af12743ff1f5c8b322fc94dcfdfb340a001000000000000000000000000000000000000900120063006900660073002f007400650073007400000000000000000000000000"
+        },
+        "poison_source": {
+            "poisoner": "responder",
+            "target": "10.0.220.52",
+            "timestamp": 1628686070.115577,
+            "action_state": "NBTNS",
+            "request": "TEST"
+        }
+    },
+    {
+        "poisoner": "ntlmrelayx",
+        "target": "10.0.229.11",
+        "timestamp": 1628691421.974177,
+        "user": "SMOKE\\jsmith",
+        "action_state": "secretsdump_fail",
+        "data": {
+            "module": "SMB",
+            "source_host": "10.0.220.52",
+            "error_msg": "DCERPC Runtime Error: code: 0x5 - rpc_s_access_denied ",
+            "fullhash": "jsmith::SMOKE:f5b6e423ddc1fcc8:93d08b4d0ba8514087fa856482480177:0101000000000000f90b3dc5bb8ed701806610fb884dea000000000002000a0053004d004f004b00450001000400460053000400120073006d006f006b0065002e006e006500740003001800660073002e0073006d006f006b0065002e006e00650074000500120073006d006f006b0065002e006e006500740007000800f90b3dc5bb8ed70106000400020000000800300030000000000000000000000000200000f83d65997ba74ca49d267e235382b8550967d60fc1a662cde2d68f8e1f4785790a001000000000000000000000000000000000000900160063006900660073002f00660061006b00650073007400000000000000000000000000",
+            "type": "ntlmv2"
+        },
+        "poison_source": {
+            "poisoner": "responder",
+            "target": "10.0.220.52",
+            "timestamp": 1628691340.844745,
+            "action_state": "NBTNS",
+            "request": "TESTING"
+        }
+    },
+    {
+        "poisoner": "responder",
+        "target": "10.0.220.52",
+        "timestamp": 1628691422.631301,
+        "action_state": "captured_hash",
+        "data": {
+            "module": "WebDAV",
+            "type": "ntlmv2",
+            "source_host": "10.0.220.52",
+            "hostname": "WIN10",
+            "user": "SMOKE\\jsmith",
+            "hash": "08118A9B472F03551DA818F0BD203226:0101000000000000EE5003D9BB8ED7015604C94C10D6F8040000000002000800390046004700540001001E00570049004E002D005000380046005A005700320050005000360042004A000400140039004600470054002E004C004F00430041004C0003003400570049004E002D005000380046005A005700320050005000360042004A002E0039004600470054002E004C004F00430041004C000500140039004600470054002E004C004F00430041004C000800300030000000000000000000000000200000F83D65997BA74CA49D267E235382B8550967D60FC1A662CDE2D68F8E1F4785790A001000000000000000000000000000000000000900160048005400540050002F00660061006B006500730074000000000000000000",
+            "fullhash": "jsmith::SMOKE:d2bfbc2f29c17d8e:08118A9B472F03551DA818F0BD203226:0101000000000000EE5003D9BB8ED7015604C94C10D6F8040000000002000800390046004700540001001E00570049004E002D005000380046005A005700320050005000360042004A000400140039004600470054002E004C004F00430041004C0003003400570049004E002D005000380046005A005700320050005000360042004A002E0039004600470054002E004C004F00430041004C000500140039004600470054002E004C004F00430041004C000800300030000000000000000000000000200000F83D65997BA74CA49D267E235382B8550967D60FC1A662CDE2D68F8E1F4785790A001000000000000000000000000000000000000900160048005400540050002F00660061006B006500730074000000000000000000"
+        },
+        "poison_source": {
+            "poisoner": "responder",
+            "target": "10.0.220.52",
+            "timestamp": 1628691340.844745,
+            "action_state": "NBTNS",
+            "request": "TESTING"
+        }
+    },
+    {
+        "poisoner": "ntlmrelayx",
+        "target": "10.0.220.52",
+        "timestamp": 1628691423.155665,
+        "user": "SMOKE\\a-jsmith",
+        "action_state": "secretsdump",
+        "data": {
+            "module": "SMB",
+            "source_host": "10.0.220.51",
+            "fullhash": "a-jsmith::SMOKE:18479f13b10f3383:54b9ba2ee448bd0d7b04c8549ddcfb3a:0101000000000000d878abd7bb8ed70107fe19977f82bda20000000002000a0053004d004f004b00450001000a00570049004e00310030000400120073006d006f006b0065002e006e006500740003001e00770069006e00310030002e0073006d006f006b0065002e006e00650074000500120073006d006f006b0065002e006e006500740007000800d878abd7bb8ed701060004000200000008003000300000000000000001000000002000002243ca7418eef866151b2fce3c1e24dfd628c6b901e958e8ca6331ede686c0460a001000000000000000000000000000000000000900200063006900660073002f00740065007300740069006e006700660061006b006500000000000000000000000000",
+            "type": "ntlmv2",
+            "secretsdump_hashes": "Administrator:500:aad3b435b51404eeaad3b435b51404ee:2a562efb10cb632b4841dc9b3f46111d:::\nGuest:501:aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::\nDefaultAccount:503:aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::\nuser:1001:aad3b435b51404eeaad3b435b51404ee:8846f7eaee8fb117ad06bdd830b7586c:::\nxadmin:1004:aad3b435b51404eeaad3b435b51404ee:5b6106a178f0fe23fce2324839070b63:::\nvisitor:1005:aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::"
+        },
+        "poison_source": {
+            "poisoner": "responder",
+            "target": "10.0.220.51",
+            "timestamp": 1628691422.305168,
+            "action_state": "LLMNR",
+            "request": "testingfake"
+        }
+    }
+]
+
+"""
+
+class CyanideEventPoisonSource:
+    def __init__(self, poisoner, target, timestamp, action_state, request):
+        self.poisoner = poisoner
+        self.target = target
+        self.timestamp = timestamp
+        self.action_state = action_state
+        self.request = request
+
+class CyanideEventData:
+    def __init__(self, module, source_host=None, hash=None, type=None, fullhash=None, error_msg=None, secretsdump_hashes=None, hostname=None, user=None, cleartext=None):
+        self.module = module
+        self.source_host = source_host
+        self.hash = hash
+        self.cleartext = cleartext
+        self.type = type
+        self.fullhash = fullhash
+        self.error_msg = error_msg
+        self.secretsdump_hashes = secretsdump_hashes
+        self.hostname = hostname
+        self.user = user
+
+class CyanideEvent:
+    def __init__(self, poisoner, target, timestamp, action_state, data, poison_source, user=None):
+        self.poisoner = poisoner
+        self.target = target
+        self.user = user
+        self.timestamp = timestamp
+        self.action_state = action_state
+        self.data = data
+        self.poison_source = poison_source
