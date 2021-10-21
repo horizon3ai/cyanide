@@ -62,7 +62,7 @@ class MYSMB3(SMB3):
         self._Connection['ClientSecurityMode'] = 0
 
         if self.RequireMessageSigning is True:
-            LOG.error('Signing is required, attack won\'t work unless using -remove-target / --remove-mic')
+            #LOG.error('Signing is required, attack won\'t work unless using -remove-target / --remove-mic')
             return
 
         self._Connection['Capabilities'] = SMB2_GLOBAL_CAP_ENCRYPTION
@@ -103,7 +103,7 @@ class MYSMB3(SMB3):
         self._Connection['GSSNegotiateToken'] = negResp['Buffer']
         self._Connection['Dialect']           = negResp['DialectRevision']
         if (negResp['SecurityMode'] & SMB2_NEGOTIATE_SIGNING_REQUIRED) == SMB2_NEGOTIATE_SIGNING_REQUIRED:
-            LOG.error('Signing is required, attack won\'t work unless using -remove-target / --remove-mic')
+            #LOG.error('Signing is required, attack won\'t work unless using -remove-target / --remove-mic')
             return
         if (negResp['Capabilities'] & SMB2_GLOBAL_CAP_LEASING) == SMB2_GLOBAL_CAP_LEASING:
             self._Connection['SupportsFileLeasing'] = True
@@ -143,7 +143,7 @@ class SMBRelayClient(ProtocolClient):
 
     def netlogonSessionKey(self, authenticateMessageBlob):
         # Here we will use netlogon to get the signing session key
-        logging.info("Connecting to %s NETLOGON service" % self.serverConfig.domainIp)
+        #logging.info("Connecting to %s NETLOGON service" % self.serverConfig.domainIp)
 
         #respToken2 = SPNEGO_NegTokenResp(authenticateMessageBlob)
         authenticateMessage = NTLMAuthChallengeResponse()
@@ -227,11 +227,11 @@ class SMBRelayClient(ProtocolClient):
             if logging.getLogger().level == logging.DEBUG:
                 import traceback
                 traceback.print_exc()
-            logging.error(str(e))
+            #logging.error(str(e))
             return e.get_error_code()
 
-        logging.info("%s\\%s successfully validated through NETLOGON" % (
-            domainName, authenticateMessage['user_name'].decode('utf-16le')))
+        #logging.info("%s\\%s successfully validated through NETLOGON" % (
+        #    domainName, authenticateMessage['user_name'].decode('utf-16le')))
 
         encryptedSessionKey = authenticateMessage['session_key']
         if encryptedSessionKey != b'':
@@ -278,9 +278,11 @@ class SMBRelayClient(ProtocolClient):
                              flags2=flags2, data=data)
         except Exception as e:
             if not self.serverConfig.smb2support:
-                LOG.error('SMBClient error: Connection was reset. Possibly the target has SMBv1 disabled. Try running ntlmrelayx with -smb2support')
+                #LOG.error('SMBClient error: Connection was reset. Possibly the target has SMBv1 disabled. Try running ntlmrelayx with -smb2support')
+                pass
             else:
-                LOG.error('SMBClient error: Connection was reset')
+                #LOG.error('SMBClient error: Connection was reset')
+                pass
             return False
         if packet[0:1] == b'\xfe':
             preferredDialect = None
@@ -405,7 +407,7 @@ class SMBRelayClient(ProtocolClient):
         try:
             smb.isValidAnswer(SMB.SMB_COM_SESSION_SETUP_ANDX)
         except Exception:
-            LOG.error("SessionSetup Error!")
+            #LOG.error("SessionSetup Error!")
             raise
         else:
             # We will need to use this uid field for all future requests/responses

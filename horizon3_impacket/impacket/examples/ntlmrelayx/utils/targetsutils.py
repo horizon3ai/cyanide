@@ -88,10 +88,14 @@ class TargetsProcessor:
                     if target != '' and target[0] != '#':
                         self.originalTargets.extend(self.processTarget(target, self.protocolClients))
         except IOError as e:
-            LOG.error("Could not open file: %s - %s", self.filename, str(e))
+            # delete to get logging back
+            pass
+            #LOG.error("Could not open file: %s - %s", self.filename, str(e))
 
         if len(self.originalTargets) == 0:
-            LOG.critical("Warning: no valid targets specified!")
+            # delete to get logging back
+            pass
+            #LOG.critical("Warning: no valid targets specified!")
 
         self.generalCandidates = [x for x in self.originalTargets if x not in self.finishedAttacks and x.username is None]
         self.namedCandidates = [x for x in self.originalTargets if x not in self.finishedAttacks and x.username is not None]
@@ -116,12 +120,12 @@ class TargetsProcessor:
             # Do we have an explicit request for it?
             for target in self.namedCandidates:
                 if target.username is not None:
-                    if target.username.upper() == identity.replace('/', '\\'):
+                    if target.username.upper() == identity.replace('/', '\\').upper():
                         self.namedCandidates.remove(target)
                         return target
                     if target.username.find('\\') < 0:
                         # Username with no domain, let's compare that way
-                        if target.username.upper() == identity.split('/')[1]:
+                        if target.username.upper() == identity.split('/')[1].upper():
                             self.namedCandidates.remove(target)
                             return target
 
@@ -135,7 +139,7 @@ class TargetsProcessor:
                     if len(match) == 0:
                         self.generalCandidates.remove(target)
                         return target
-                LOG.debug("No more targets for user %s" % identity)
+                #LOG.debug("No more targets for user %s" % identity)
                 return None
             else:
                 return self.generalCandidates.pop()
@@ -146,11 +150,13 @@ class TargetsProcessor:
 
         if len(self.generalCandidates) == 0:
             if len(self.namedCandidates) == 0:
+                pass
                 # We are here, which means all the targets are already exhausted by the client
-                LOG.info("All targets processed!")
+                #LOG.info("All targets processed!")
             elif identity is not None:
+                pass
                 # This user has no more targets
-                LOG.debug("No more targets for user %s" % identity)
+                #LOG.debug("No more targets for user %s" % identity)
             return None
         else:
             return self.getTarget(identity)
@@ -165,7 +171,7 @@ class TargetsFileWatcher(Thread):
         while True:
             mtime = os.stat(self.targetprocessor.filename).st_mtime
             if mtime > self.lastmtime:
-                LOG.info('Targets file modified - refreshing')
+                #LOG.info('Targets file modified - refreshing')
                 self.lastmtime = mtime
                 self.targetprocessor.readTargets()
             time.sleep(1.0)

@@ -41,6 +41,7 @@ class NTLMRelayxConfig:
         self.ipv6 = False
         self.remove_mic = False
         self.ntlmrelayx_q = None
+        self.capture_q = None
 
         self.command = None
 
@@ -210,3 +211,6 @@ class NTLMRelayxConfig:
 
     def setToolQueue(self, tool_q):
         self.ntlmrelayx_q = tool_q
+
+    def getToolQueue(self):
+        return self.ntlmrelayx_q

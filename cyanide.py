@@ -48,6 +48,8 @@ class Cyanide:
         self.poison = True
         self.terminate_cyanide = False
         self.config = config
+        if not self.config.stdout_only and not self.config.output_file:
+            raise ValueError('You must specify an output file to dump production database to!')
         self.output_file = self.config.output_file
         # all tools share this queue
         self.poisoner_q = Queue()
@@ -183,31 +185,32 @@ class Cyanide:
                 # if the proc did die and comms destroyed, will be caught at beginning of loop
                 sys.stderr.write(f'Encountered an error processing the queue. {ex}\n')
 
-            # check if we need to dump prod db contents
-            prod_conn = None
-            relay_conn = None
-            try:
-                prod_conn = sqlite3.connect(Cyanide.PRODUCTION_DATABASE)
-                timenow = datetime.now().timestamp()
-                if timenow - dump_prod_db_timer >= 30 and poisoner:
-                    try:
-                        relay_conn = sqlite3.connect(Cyanide.RELAY_DATABASE)
-                        logger.debug(f'dumping relay db')
-                        Cyanide.PARSER_MAP['ntlmrelayx'](self.config)._relay_age_handler(relay_conn, prod_conn, age=30)
-                    except Exception as e:
-                        sys.stderr.write(
-                            f'run_poisoner encountered an error creating relay database connection {type(e)}: {e}\n')
-                    self.dump_prod_db_to_file(prod_conn)
-                    dump_prod_db_timer = datetime.now(timezone.utc).timestamp()
+            if not self.config.stdout_only:
+                # check if we need to dump prod db contents
+                prod_conn = None
+                relay_conn = None
+                try:
+                    prod_conn = sqlite3.connect(Cyanide.PRODUCTION_DATABASE)
+                    timenow = datetime.now().timestamp()
+                    if timenow - dump_prod_db_timer >= 30 and poisoner:
+                        try:
+                            relay_conn = sqlite3.connect(Cyanide.RELAY_DATABASE)
+                            logger.debug(f'dumping relay db')
+                            Cyanide.PARSER_MAP['ntlmrelayx'](self.config)._relay_age_handler(relay_conn, prod_conn, age=30)
+                        except Exception as e:
+                            sys.stderr.write(
+                                f'run_poisoner encountered an error creating relay database connection {type(e)}: {e}\n')
+                        self.dump_prod_db_to_file(prod_conn)
+                        dump_prod_db_timer = datetime.now(timezone.utc).timestamp()
 
-            except Exception as e:
-                sys.stderr.write(f'cyanide main loop encountered an error {type(e)}: {e}\n')
+                except Exception as e:
+                    sys.stderr.write(f'cyanide main loop encountered an error {type(e)}: {e}\n')
 
-            finally:
-                if prod_conn:
-                    prod_conn.close()
-                if relay_conn:
-                    relay_conn.close()
+                finally:
+                    if prod_conn:
+                        prod_conn.close()
+                    if relay_conn:
+                        relay_conn.close()
 
 
     def run_ntlmrelayx(self):
@@ -652,7 +655,7 @@ class ToolInterface:
             return
 
         try:
-            if not self.config.loot_only:
+            if not self.config.stdout_only:
                 if msg.get("target") == '127.0.0.1':
                     # failsafe in case something is missed in smb/http relayserver.py's
                     return
@@ -667,6 +670,8 @@ class ToolInterface:
                 logger.debug(f'inserting captured hash from {msg["poisoner"]} to database.\nMessage: {msg}')
                 self.production_db_handler(query, conn)
             else:
+                if msg.get("target") == '127.0.0.1':
+                    return
                 print(json.dumps(msg, indent=4))
 
         except Exception as e:
@@ -806,19 +811,18 @@ class CyanideNTLMRelayxParser(ToolInterface):
             msg['poison_source'] = poisoner_source_msg
             if action_state == 'captured_hash':
                 logger.debug(f'ntlmrelayx parse_output inserting captured_hash to relay database\nMessage: {msg}')
-                if not self.config.loot_only:
-                    if self.config.no_relay:
-                        self._process_captured_message(msg)
-
-                    else:
-                        query = "INSERT INTO used_hash_captures (timestamp, msg) VALUES (?, ?)", (msg['timestamp'], json.dumps(msg))
-                        self.relay_db_handler(query, relay_conn)
-
-                    # no need to continue - just need this msg to go into the db
-                    return
+                if self.config.no_relay:
+                    self._process_captured_message(msg)
 
                 else:
+                    query = "INSERT INTO used_hash_captures (timestamp, msg) VALUES (?, ?)", (msg['timestamp'], json.dumps(msg))
+                    self.relay_db_handler(query, relay_conn)
+
+                if self.config.stdout_only:
                     print(json.dumps(msg, indent=4))
+
+                # no need to continue - just need this msg to go into the db
+                return
 
             elif action_state == 'secretsdump' or action_state == 'secretsdump_fail':
                 # grab the output file contents
@@ -852,7 +856,7 @@ class CyanideNTLMRelayxParser(ToolInterface):
             logger.debug(f'Final message {msg}')
 
             if msg:
-                if not self.config.loot_only:
+                if not self.config.stdout_only:
                     # remove corr_id from all data keys
                     msg = self._clean_final_msg_before_db_input(msg)
                     msg = json.dumps(msg)
@@ -881,9 +885,9 @@ if __name__ == "__main__":
 
     # Main arguments for Cyanide
     parser.add_argument('-h', '--help', action='help', help='Show all options')
-    parser.add_argument('-iface', '--iface', action='store', metavar='INTERFACE', help='Host interface for services to bind to')
+    parser.add_argument('-iface', '--iface', action='store', metavar='INTERFACE', required=True, help='Host interface for services to bind to')
     parser.add_argument("-w", "--watch", action='store_true', help="Enable watching files for updates")
-    parser.add_argument('-loot', '--loot-only', action='store_true', help='Store all information gathered in a sqlite database', default=False)
+    parser.add_argument('-stdout', '--stdout-only', action='store_true', help='Print all messages to screen', default=False)
     parser.add_argument('-o', '--output_file', help='Output file to be used to write contents of production db to file', required=False)
 
     # responder options
@@ -902,12 +906,12 @@ if __name__ == "__main__":
 
     try:
         options = parser.parse_args()
-        if options.responder and not options.responder_blacklist:
-            sys.stderr.write(f'A blacklist for Responder is required when Responder is enabled.  Use -rb and specify a comma separated list of ip address or network ranges (e.g. 10.0.8.1 or 10.0.8.0-255 format\n')
+        #if options.responder and not options.responder_blacklist:
+        #    sys.stderr.write(f'A blacklist for Responder is required when Responder is enabled.  Use -rb and specify a comma separated list of ip address or network ranges (e.g. 10.0.8.1 or 10.0.8.0-255 format\n')
 
-        else:
-            cyanide = Cyanide(options)
-            cyanide.run_poisoner()
+        #else:
+        cyanide = Cyanide(options)
+        cyanide.run_poisoner()
 
     except Exception as e:
         sys.stderr.write(f'Cyanide encountered an error: {type(e)}: {str(e)}\n')

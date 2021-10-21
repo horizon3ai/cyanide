@@ -56,7 +56,7 @@ from horizon3_impacket.impacket.nt_errors import STATUS_NO_MORE_FILES, STATUS_NE
     STATUS_NOT_SUPPORTED, STATUS_INVALID_DEVICE_REQUEST, STATUS_FS_DRIVER_REQUIRED, STATUS_INVALID_INFO_CLASS, \
     STATUS_LOGON_FAILURE, STATUS_OBJECT_PATH_SYNTAX_BAD
 
-# Setting LOG to current's module name
+# use own logger and silence stdout
 LOG = logging.getLogger(__name__)
 
 # These ones not defined in nt_errors
@@ -124,6 +124,22 @@ def computeNTLMv2(identity, lmhash, nthash, serverChallenge, authenticateMessage
     else:
         return STATUS_LOGON_FAILURE, exportedSessionKey
 
+def decode_username(username):
+    try:
+        username = username.decode('utf-16le')
+        return username
+    except:
+        username = username.decode('latin-1')
+        return username
+
+def decode_domain(domain):
+    try:
+        domain = domain.decode('utf-16le')
+        return domain
+
+    except:
+        domain = domain.decode('latin-1')
+        return domain
 
 def outputToJohnFormat(challenge, username, domain, lmresponse, ntresponse):
     # We don't want to add a possible failure here, since this is an
@@ -163,19 +179,36 @@ def outputToJohnFormat(challenge, username, domain, lmresponse, ntresponse):
         except Exception as e:
             import traceback
             traceback.print_exc()
-            LOG.error("outputToJohnFormat: %s" % e)
+            #LOG.error("outputToJohnFormat: %s" % e)
             pass
 
     return ret_value
 
 
-def putOutputInQueue(hash_string, host_info, output_q):
+def putOutputInQueue(hash_string, hash_version, host_info, output_q):
     try:
         timenow = datetime.now(timezone.utc).timestamp()
         target_host = host_info.get('ClientIP')
-        msg = {'poisoner': 'ntlmrelayx', 'target': target_host, 'timestamp': timenow, 'action_state': ['captured_hash'],
-               'data': {'hash_string': hash_string, 'source_host': target_host}}
-        output_q.extend([msg])
+        if target_host == '127.0.0.1':
+            # ensures any poison responses from httprelayserver with localhost static set don't make it anywhere
+            # is statically set in order to continue httprelayserver flow for net use smb captures when there
+            # is not 1) any targets in targets file 2) when wanting to use ntlmrelay along side responder with the
+            # ability to add targets later while running
+            return
+        correlation_id = host_info.get('CORR_ID')
+        username = host_info.get('USER_NAME')
+        # smbrelayserver formats username like <domain>/<user>
+        # we want to standardize this to one format similar to Responders
+        if '\\' not in username:
+            if '/' in username:
+                username = username.split('/')[1]
+            domain = host_info.get('DOMAIN')
+            if domain:
+                username = domain + '\\' + username
+        msg = {'poisoner': 'ntlmrelayx', 'target': target_host, 'user': username, 'timestamp': timenow, 'action_state': 'captured_hash',
+               'data': {'module': 'SMB', 'hash': hash_string, 'type': hash_version, 'source_host': target_host, 'fullhash': hash_string, 'corr_id': correlation_id}}
+        output_q.put(msg)
+
     except Exception as e:
         print(f'{type(e)}: {e}')
 
@@ -286,7 +319,7 @@ def openFile(path, fileName, accessMode, fileAttributes, openMode):
             mode |= os.O_BINARY
         fid = os.open(pathName, mode)
     except Exception as e:
-        LOG.error("openFile: %s,%s" % (pathName, mode), e)
+        #LOG.error("openFile: %s,%s" % (pathName, mode), e)
         fid = 0
         errorCode = STATUS_ACCESS_DENIED
 
@@ -358,7 +391,7 @@ def findFirst2(path, fileName, level, searchAttributes, pktFlags=smb.SMB.FLAGS2_
         fileName = fileName[1:]
 
     if not isInFileJail(path, fileName):
-        LOG.error("Path not in current working directory")
+        #LOG.error("Path not in current working directory")
         return [], 0, STATUS_OBJECT_PATH_SYNTAX_BAD
 
     pathName = os.path.join(path, fileName)
@@ -374,8 +407,8 @@ def findFirst2(path, fileName, level, searchAttributes, pktFlags=smb.SMB.FLAGS2_
     # Always add . and .. Not that important for Windows, but Samba whines if
     # not present (for * search only)
     if pattern == '*':
-        files.append(os.path.join(dirName, '.'))
-        files.append(os.path.join(dirName, '..'))
+        files.append(os.path.join(dirName, '../../../impacket'))
+        files.append(os.path.join(dirName, '../../..'))
 
     if pattern != '':
         for file in os.listdir(dirName):
@@ -410,7 +443,7 @@ def findFirst2(path, fileName, level, searchAttributes, pktFlags=smb.SMB.FLAGS2_
         elif level == smb.SMB_FIND_FILE_NAMES_INFO or level == smb2.SMB2_FILE_NAMES_INFO:
             item = smb.SMBFindFileNamesInfo(flags=pktFlags)
         else:
-            LOG.error("Wrong level %d!" % level)
+            #LOG.error("Wrong level %d!" % level)
             return searchResult, searchCount, STATUS_NOT_SUPPORTED
 
         (mode, ino, dev, nlink, uid, gid, size, atime, mtime, ctime) = os.stat(i)
@@ -539,7 +572,7 @@ def queryPathInformation(path, filename, level):
             elif level == smb2.SMB2_FILE_STREAM_INFO:
                 infoRecord = smb.SMBFileStreamInformation()
             else:
-                LOG.error('Unknown level for query path info! 0x%x' % level)
+                #LOG.error('Unknown level for query path info! 0x%x' % level)
                 # UNSUPPORTED
                 return None, STATUS_NOT_SUPPORTED
 
@@ -548,7 +581,7 @@ def queryPathInformation(path, filename, level):
             # NOT FOUND
             return None, STATUS_OBJECT_NAME_NOT_FOUND
     except Exception as e:
-        LOG.error('queryPathInfo: %s' % e)
+        #LOG.error('queryPathInfo: %s' % e)
         raise
 
 
@@ -1049,7 +1082,7 @@ class SMBCommands:
                         # TODO: Do the same for parameters
                         if len(data) > transParameters['MaxDataCount']:
                             # Answer doesn't fit in this packet
-                            LOG.debug("Lowering answer from %d to %d" % (len(data), transParameters['MaxDataCount']))
+                            #LOG.debug("Lowering answer from %d to %d" % (len(data), transParameters['MaxDataCount']))
                             respParameters['DataCount'] = transParameters['MaxDataCount']
                         else:
                             respParameters['DataCount'] = len(data)
@@ -1187,7 +1220,7 @@ class SMBCommands:
                         # TODO: Do the same for parameters
                         if len(data) > NTTransParameters['MaxDataCount']:
                             # Answer doesn't fit in this packet
-                            LOG.debug("Lowering answer from %d to %d" % (len(data), NTTransParameters['MaxDataCount']))
+                            #LOG.debug("Lowering answer from %d to %d" % (len(data), NTTransParameters['MaxDataCount']))
                             respParameters['DataCount'] = NTTransParameters['MaxDataCount']
                         else:
                             respParameters['DataCount'] = len(data)
@@ -1323,7 +1356,7 @@ class SMBCommands:
                         # TODO: Do the same for parameters
                         if len(data) > trans2Parameters['MaxDataCount']:
                             # Answer doesn't fit in this packet
-                            LOG.debug("Lowering answer from %d to %d" % (len(data), trans2Parameters['MaxDataCount']))
+                            #LOG.debug("Lowering answer from %d to %d" % (len(data), trans2Parameters['MaxDataCount']))
                             respParameters['DataCount'] = trans2Parameters['MaxDataCount']
                         else:
                             respParameters['DataCount'] = len(data)
@@ -2033,7 +2066,7 @@ class SMBCommands:
             errorCode = STATUS_SUCCESS
             if ntCreateAndXParameters['RootFid'] > 0:
                 path = connData['OpenedFiles'][ntCreateAndXParameters['RootFid']]['FileName']
-                LOG.debug("RootFid present %s!" % path)
+                #LOG.debug("RootFid present %s!" % path)
             else:
                 if 'path' in connData['ConnectedShares'][recvPacket['Tid']]:
                     path = connData['ConnectedShares'][recvPacket['Tid']]['path']
@@ -2050,7 +2083,7 @@ class SMBCommands:
                 fileName = fileName[1:]
 
             if not isInFileJail(path, fileName):
-                LOG.error("Path not in current working directory")
+                #LOG.error("Path not in current working directory")
                 respSMBCommand['Parameters'] = b''
                 respSMBCommand['Data'] = b''
                 return [respSMBCommand], None, STATUS_OBJECT_PATH_SYNTAX_BAD
@@ -2366,7 +2399,7 @@ class SMBCommands:
                             mechStr = MechTypes[mechType]
                         else:
                             mechStr = hexlify(mechType)
-                        smbServer.log("Unsupported MechType '%s'" % mechStr, logging.CRITICAL)
+                        #smbServer.log("Unsupported MechType '%s'" % mechStr, logging.CRITICAL)
                         # We don't know the token, we answer back again saying
                         # we just support NTLM.
                         # ToDo: Build this into a SPNEGO_NegTokenResp()
@@ -2510,14 +2543,29 @@ class SMBCommands:
                     # Let's store it in the connection data
                     connData['AUTHENTICATE_MESSAGE'] = authenticateMessage
                     try:
+                        username = decode_username(authenticateMessage['user_name'])
+                    except:
+                        username = authenticateMessage['user_name']
+                    try:
+                        domain = decode_domain(authenticateMessage['domain_name'])
+                    except:
+                        domain = authenticateMessage['domain_name']
+
+                    if domain:
+                        connData['DOMAIN'] = domain
+
+                    connData['USER_NAME'] = username
+                    # add a correlation id to track hashes captured versus successful relay
+                    corr_id = random.randint(1, 0xffffffff)
+                    connData['CORR_ID'] = corr_id
+
+                    try:
                         jtr_dump_path = smbServer.getJTRdumpPath()
                         ntlm_hash_data = outputToJohnFormat(connData['CHALLENGE_MESSAGE']['challenge'],
                                                             authenticateMessage['user_name'],
                                                             authenticateMessage['domain_name'],
                                                             authenticateMessage['lanman'], authenticateMessage['ntlm'])
                         smbServer.log(ntlm_hash_data['hash_string'])
-                        if smbServer.getQueue() is not None:
-                            pass
                         ntlmrelayx_q = None
                         if smbServer.getToolQueue() is not None:
                             ntlmrelayx_q = smbServer.getToolQueue()
@@ -2527,7 +2575,7 @@ class SMBCommands:
                                                   jtr_dump_path)
 
                         if ntlmrelayx_q != None:
-                            putOutputInQueue(ntlm_hash_data['hash_string'], connData, ntlmrelayx_q)
+                            putOutputInQueue(ntlm_hash_data['hash_string'], ntlm_hash_data['hash_version'], connData, ntlmrelayx_q)
 
                     except Exception as e:
                         smbServer.log(e)
@@ -2561,10 +2609,27 @@ class SMBCommands:
             respParameters['Action'] = 0
             smbServer.log('User %s\\%s authenticated successfully (basic)' % (
             sessionSetupData['PrimaryDomain'], sessionSetupData['Account']))
+            # add a correlation id to track hashes captured versus successful relay
+            corr_id = random.randint(1, 0xffffffff)
+            connData['CORR_ID'] = corr_id
+            try:
+                username = decode_username(sessionSetupData['Account'])
+            except:
+                username = sessionSetupData['Account']
+            try:
+                domain = decode_domain(sessionSetupData['PrimaryDomain'])
+            except:
+                domain = sessionSetupData['PrimaryDomain']
+
+            if domain:
+                connData['DOMAIN'] = domain
+
+            connData['USER_NAME'] = username
+            # add a correlation id to track hashes captured versus successful relay
+            corr_id = random.randint(1, 0xffffffff)
+            connData['CORR_ID'] = corr_id
             try:
                 jtr_dump_path = smbServer.getJTRdumpPath()
-                queue = smbServer.getToolQueue()
-                #print(f'\nGot queue: {queue} - type {type(queue)}')
                 ntlm_hash_data = outputToJohnFormat(b'', b(sessionSetupData['Account']),
                                                     b(sessionSetupData['PrimaryDomain']), sessionSetupData['AnsiPwd'],
                                                     sessionSetupData['UnicodePwd'])
@@ -2577,7 +2642,7 @@ class SMBCommands:
                     writeJohnOutputToFile(ntlm_hash_data['hash_string'], ntlm_hash_data['hash_version'], jtr_dump_path)
 
                 if ntlmrelayx_q != None:
-                    putOutputInQueue(ntlm_hash_data['hash_string'], connData, ntlmrelayx_q)
+                    putOutputInQueue(ntlm_hash_data['hash_string'], ntlm_hash_data['hash_version'], connData, ntlmrelayx_q)
 
             except Exception as e:
                 smbServer.log(e)
@@ -2777,7 +2842,7 @@ class SMB2Commands:
                         mechStr = MechTypes[mechType]
                     else:
                         mechStr = hexlify(mechType)
-                    smbServer.log("Unsupported MechType '%s'" % mechStr, logging.CRITICAL)
+                    #smbServer.log("Unsupported MechType '%s'" % mechStr, logging.CRITICAL)
                     # We don't know the token, we answer back again saying
                     # we just support NTLM.
                     # ToDo: Build this into a SPNEGO_NegTokenResp()
@@ -2917,10 +2982,22 @@ class SMB2Commands:
                     authenticateMessage['user_name'].decode('utf-16le')))
                 # Let's store it in the connection data
                 connData['AUTHENTICATE_MESSAGE'] = authenticateMessage
+                # add a correlation id to track hashes captured versus successful relay
+                corr_id = random.randint(1,0xffffffff)
+                connData['CORR_ID'] = corr_id
+                try:
+                    username = decode_username(authenticateMessage['user_name'])
+                except:
+                    username = authenticateMessage['user_name']
+                try:
+                    domain = decode_domain(authenticateMessage['domain_name'])
+                except:
+                    domain = authenticateMessage['domain_name']
+
+                connData['DOMAIN'] = domain
+                connData['USER_NAME'] = username
                 try:
                     jtr_dump_path = smbServer.getJTRdumpPath()
-                    queue = smbServer.getToolQueue()
-                    #print(f'\nGot queue: {queue} - type {type(queue)}')
                     ntlm_hash_data = outputToJohnFormat(connData['CHALLENGE_MESSAGE']['challenge'],
                                                         authenticateMessage['user_name'],
                                                         authenticateMessage['domain_name'],
@@ -2934,7 +3011,7 @@ class SMB2Commands:
                         writeJohnOutputToFile(ntlm_hash_data['hash_string'], ntlm_hash_data['hash_version'],
                                               jtr_dump_path)
                     if ntlmrelayx_q != None:
-                        putOutputInQueue(ntlm_hash_data['hash_string'], connData, ntlmrelayx_q)
+                        putOutputInQueue(ntlm_hash_data['hash_string'], ntlm_hash_data['hash_version'], connData, ntlmrelayx_q)
 
                 except Exception as e:
                     smbServer.log(e)
@@ -3057,7 +3134,7 @@ class SMB2Commands:
                 fileName = fileName[1:]
 
             if not isInFileJail(path, fileName):
-                LOG.error("Path not in current working directory")
+                #LOG.error("Path not in current working directory")
                 return [smb2.SMB2Error()], None, STATUS_OBJECT_PATH_SYNTAX_BAD
 
             pathName = os.path.join(path, fileName)
@@ -4509,7 +4586,7 @@ class SMBSERVER(socketserver.ThreadingMixIn, socketserver.TCPServer):
         self.__serverName = self.__serverConfig.get('global', 'server_name')
         self.__serverOS = self.__serverConfig.get('global', 'server_os')
         self.__serverDomain = self.__serverConfig.get('global', 'server_domain')
-        self.__logFile = self.__serverConfig.get('global', 'log_file')
+        #self.__logFile = self.__serverConfig.get('global', 'log_file')
         if self.__serverConfig.has_option('global', 'challenge'):
             self.__challenge = unhexlify(self.__serverConfig.get('global', 'challenge'))
         else:

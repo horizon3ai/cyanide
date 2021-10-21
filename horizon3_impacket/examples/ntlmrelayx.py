@@ -333,7 +333,7 @@ def main(raw_args=None, tool_q=None):
        sys.exit(1)
 
     # Init the example's logger theme
-    logger.init(options.ts)
+    #logger.init(options.ts)
 
     if options.debug is True:
         logging.getLogger().setLevel(logging.DEBUG)

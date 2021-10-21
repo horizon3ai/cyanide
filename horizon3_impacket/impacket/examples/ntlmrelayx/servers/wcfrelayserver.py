@@ -154,7 +154,7 @@ class WCFRelayServer(Thread):
                                 mechStr = MechTypes[mechType]
                             else:
                                 mechStr = hexlify(mechType)
-                            LOG.error("Unsupported MechType '%s'" % mechStr)
+                            #LOG.error("Unsupported MechType '%s'" % mechStr)
                             # We don't know the token, we answer back again saying
                             # we just support NTLM.
                             respToken = SPNEGO_NegTokenResp()

