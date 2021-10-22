@@ -77,3 +77,6 @@ Cyanide utilizes sqlite databases to store information of hosts that are poisone
 2. Put a loopback taret in format of smb://127.0.0.1
 
 `python cyanide.py -iface <eth0> --responder -ntf ntlmrelayx_targets.txt --no-relay`
+___
+# LICENSING
+All code except any files under horizon3_impacket maintain a GPLv3 license.  All code under horizon3_impacket maintain Impackets original license of Apache.  For more information, please see the licenses directory.
